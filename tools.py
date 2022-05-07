@@ -14,11 +14,14 @@ class TruthTable(object):
         else:
             for idx, item in enumerate(self.values):
                 if isinstance(item, int):
-                    self.values[idx] = BinValue(value=item, bitsiz=self._out_siz)
+                    self.values[idx] = BinValue(value=item, dcare=2**self._out_siz-1, bitsiz=self._out_siz)
                 elif not isinstance(item, BinValue):
                     raise Exception(f'Error ocurred on generating truth table: invalid value {item}')
                 else:
                     self.values[idx] = BinValue(value=item.value, dcare=item.dcare, bitsiz=self._out_siz)
+
+    def getSize(self):
+        return self._in_siz, self._out_siz
 
     def setValue(self, idx, val):
         if not isinstance(idx, BinValue):
@@ -40,7 +43,7 @@ class TruthTable(object):
             raise InvalidBinValueException('idx cannot have any dont care literal')
         return self.values[idx.value]
 
-    def searchMinExprs(self, target, only_min=True):
+    def searchMinimumTargetExprs(self, target, only_min=True):
         if not isinstance(target, BinValue):
             raise InvalidTypeException('target_idx', 'BinValue', type(target).__name__)
 
@@ -93,9 +96,7 @@ class TruthTable(object):
         selected_idx = [0] * len(implicants_ids)
         maximum_idx = [len(implicants_map[impl_id])-1 for impl_id in implicants_ids]
 
-        print(implicants_ids)
-
-        while selected_idx != maximum_idx:
+        while True:
             expr = set()
             for pos, sel_idx in enumerate(selected_idx):
                 impl_id = implicants_ids[pos]
@@ -105,6 +106,9 @@ class TruthTable(object):
 
             if expr not in results:
                 results.append(expr)
+
+            if selected_idx == maximum_idx:
+                break
 
             selected_idx[0] += 1
             for pivot in range(len(selected_idx)):
@@ -137,6 +141,50 @@ class TruthTable(object):
             final_exprs = min_final_exprs
 
         return final_exprs
+
+    def searchMinimumExpr(self):
+        results = []
+        for target_idx in range(self._out_siz):
+            target = BinValue(value=1 << target_idx, dcare=0, bitsiz=self._out_siz)
+            min_exprs = self.searchMinimumTargetExprs(target=target, only_min=True)
+            results.append(min_exprs[0])
+        return results
+
+    def stateTransitionConversion(self, excitation_table):
+        if not isinstance(excitation_table, TruthTable):
+            raise InvalidTypeException('excitation_table', 'TruthTable', type(excitation_table).__name__)
+        if self._in_siz != self._out_siz:
+            raise BitsizDismatchException('to convert bitwise, bit size needs to be matched')
+
+        exc_in_siz, exc_out_siz = excitation_table.getSize()
+        result_table = TruthTable(in_siz=self._in_siz, out_siz=self._out_siz*exc_out_siz)
+
+        for idx in range(2 ** self._in_siz):
+            bin_idx = BinValue(value=idx, dcare=0, bitsiz=self._in_siz)
+            bin_val = self.values[idx]
+            out_val = 0
+            out_dca = 0
+            out_bsiz = 0
+
+            for bit_pos in range(self._in_siz):
+                mask = 1 << bit_pos
+                bin_idx_mask = bin_idx.value & mask
+                bin_val_mask = bin_val.value & mask
+
+                if bin_val.dcare:
+                    out_dca += (2**exc_out_siz-1) * (1 << out_bsiz)
+                else:
+                    exc_in_bin_val = 0
+                    exc_in_bin_val += 1 if bin_val_mask == mask else 0
+                    exc_in_bin_val += 2 if bin_idx_mask == mask else 0
+                    out_val += excitation_table.values[exc_in_bin_val].value * (1 << out_bsiz)
+                    out_dca += excitation_table.values[exc_in_bin_val].dcare * (1 << out_bsiz)
+
+                out_bsiz += exc_out_siz
+
+            result_table.setValue(idx=bin_idx, val=BinValue(value=out_val, dcare=out_dca, bitsiz=out_bsiz))
+
+        return result_table
 
 
 class Implicant(object):
@@ -212,17 +260,17 @@ class BinValue(object):
 
     def __add__(self, other):
         if isinstance(other, int):
-            return BinValue(self.value + other)
+            return BinValue(self.value + other, dcare=self.dcare, bitsiz=self.bitsiz)
         elif isinstance(other, BinValue):
-            return BinValue(self.value + other.value)
+            return BinValue(self.value + other.value, dcare=self.dcare, bitsiz=self.bitsiz)
         else:
             raise InvalidTypeException(varname="other", right="int or BinValue", wrong=f"{type(other).__name__}")
 
     def __sub__(self, other):
         if isinstance(other, int):
-            return BinValue(self.value - other)
+            return BinValue(self.value - other, dcare=self.dcare, bitsiz=self.bitsiz)
         elif isinstance(other, BinValue):
-            return BinValue(self.value - other.value)
+            return BinValue(self.value - other.value, dcare=self.dcare, bitsiz=self.bitsiz)
         else:
             raise InvalidTypeException(varname="other", right="int or BinValue", wrong=f"{type(other).__name__}")
 
@@ -249,6 +297,37 @@ class BinValue(object):
         else:
             raise InvalidTypeException(varname="other", right="int or BinValue", wrong=f"{type(other).__name__}")
         return self
+
+    def __eq__(self, other):
+        if isinstance(other, int):
+            return self.value == other
+        elif isinstance(other, BinValue):
+            return self.value == other.value and self.dcare == other.dcare
+        else:
+            raise InvalidTypeException(varname="other", right="int or BinValue", wrong=f"{type(other).__name__}")
+
+    def endswith(self, other):
+        if not isinstance(other, BinValue):
+            raise InvalidTypeException(varname='other', right='BinValue', wrong=type(other).__name__)
+        flag = True
+        for idx in range(other.bitsiz):
+            if (other.value & 1 << idx) != (self.value & 1 << idx):
+                flag = False
+                break
+        return flag
+
+    @classmethod
+    def concat(cls, *args):
+        val = 0
+        dca = 0
+        bsiz = 0
+        for arg in args:
+            if not isinstance(arg, BinValue):
+                raise InvalidTypeException(varname='concat arguments', right='BinValue', wrong=type(arg).__name__)
+            val += arg.value * (1 << bsiz)
+            dca += arg.dcare * (1 << bsiz)
+            bsiz += arg.bitsiz
+        return BinValue(value=val, dcare=dca, bitsiz=bsiz)
 
     def maxval(self) -> int:
         return 2 ** self.bitsiz - 1
@@ -520,6 +599,7 @@ if __name__ == '__main__':
         table.setValue(BinValue(idx), BinValue(1))
     for idx in dcare_indexes:
         table.setValue(BinValue(idx), BinValue(1, dcare=1))
+    print()
     search_results = table.searchMinExprs(BinValue(1), only_min=False)
     for result in search_results:
         print(list(map(lambda x: str(x), result)))

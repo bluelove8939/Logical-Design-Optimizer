@@ -61,3 +61,12 @@ class InvalidImplicantException(Exception):
 
     def __str__(self):
         return self.msg
+
+
+class InvalidSequenceException(Exception):
+    def __init__(self, msg="invalid sequence"):
+        self.msg = f'InvalidSequenceException ocurred: {msg}'
+
+    def __str__(self):
+        return self.msg
+
